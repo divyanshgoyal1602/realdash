@@ -146,16 +146,20 @@ export default function RegisterPage() {
         inviteToken: inviteToken || undefined,
       };
 
-      await api.post('/auth/register', payload);
+      const { data } = await api.post('/auth/register', payload);
 
-      // Auto-login after successful registration
-      await login(form.email, form.password);
-      setStep(3);
-
-      setTimeout(() => {
-        navigate('/');
-        toast.success('Welcome to RealDash!');
-      }, 2000);
+      if (data.pending) {
+        // Self-registered — needs admin approval, do NOT auto-login
+        setStep(3);
+      } else {
+        // Invite-based — auto-login immediately
+        await login(form.email, form.password);
+        setStep(3);
+        setTimeout(() => {
+          navigate('/');
+          toast.success('Welcome to RealDash!');
+        }, 2000);
+      }
     } catch (err) {
       const msg = err.response?.data?.message || 'Registration failed. Please try again.';
       toast.error(msg);
@@ -168,19 +172,42 @@ export default function RegisterPage() {
     }
   };
 
-  // Success step
+  // Success / pending step
   if (step === 3) {
+    const isPending = !inviteToken; // self-registered = pending approval
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
-        <div className="text-center animate-fade-up">
-          <div className="w-20 h-20 rounded-full bg-emerald-900/40 border border-emerald-700 flex items-center justify-center mx-auto mb-5">
-            <CheckCircle2 size={40} className="text-emerald-400" />
+        <div className="text-center animate-fade-up max-w-sm">
+          <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-5 ${
+            isPending
+              ? 'bg-amber-900/40 border border-amber-700'
+              : 'bg-emerald-900/40 border border-emerald-700'
+          }`}>
+            {isPending
+              ? <AlertCircle size={40} className="text-amber-400" />
+              : <CheckCircle2 size={40} className="text-emerald-400" />}
           </div>
-          <h1 className="font-display text-2xl font-semibold text-slate-100 mb-2">Registration Successful!</h1>
-          <p className="text-slate-400 text-sm">Logging you in and taking you to the dashboard…</p>
-          <div className="mt-5 flex justify-center">
-            <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-          </div>
+          {isPending ? (
+            <>
+              <h1 className="font-display text-2xl font-semibold text-slate-100 mb-2">Registration Submitted!</h1>
+              <p className="text-slate-400 text-sm leading-relaxed">
+                Your account is <span className="text-amber-400 font-medium">pending admin approval</span>.
+                You'll be able to log in once an administrator approves your request.
+              </p>
+              <p className="text-slate-600 text-xs mt-3">You may close this page.</p>
+              <Link to="/login" className="mt-5 inline-block text-brand-400 hover:text-brand-300 text-sm font-medium transition-colors">
+                ← Back to Login
+              </Link>
+            </>
+          ) : (
+            <>
+              <h1 className="font-display text-2xl font-semibold text-slate-100 mb-2">Registration Successful!</h1>
+              <p className="text-slate-400 text-sm">Logging you in and taking you to the dashboard…</p>
+              <div className="mt-5 flex justify-center">
+                <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+            </>
+          )}
         </div>
       </div>
     );

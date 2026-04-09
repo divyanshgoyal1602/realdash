@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users, Building2, Plus, RefreshCw, Trash2,
   ToggleLeft, ToggleRight, KeyRound, Link2, Copy, Check,
+  UserCheck, UserX, Clock,
 } from 'lucide-react';
 import api from '../services/api';
 import {
@@ -24,6 +25,7 @@ const ROLE_COLORS = {
 export default function AdminPage() {
   const [tab, setTab] = useState('users');
   const [users, setUsers] = useState([]);
+  const [pendingUsers, setPendingUsers] = useState([]);
   const [offices, setOffices] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -48,11 +50,16 @@ export default function AdminPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [uRes, oRes] = await Promise.all([
+      const [uRes, oRes, pendingRes] = await Promise.all([
         api.get('/auth/users'),
         api.get('/offices'),
+        api.get('/auth/users?isActive=false'),
       ]);
-      setUsers(uRes.data.users || []);
+      const allUsers = uRes.data.users || [];
+      // Pending = inactive AND never logged in (self-registered, awaiting approval)
+      const pending = allUsers.filter(u => !u.isActive && !u.lastLogin);
+      setUsers(allUsers.filter(u => u.isActive || u.lastLogin)); // active or previously active
+      setPendingUsers(pending);
       setOffices(oRes.data.offices || []);
     } catch (err) {
       toast.error('Failed to load data');
@@ -90,6 +97,29 @@ export default function AdminPage() {
       load();
     } catch {
       toast.error('Failed to update user');
+    }
+  };
+
+  // ── Approve user ─────────────────────────────────────────────────────────────
+  const handleApprove = async (userId) => {
+    try {
+      await api.patch(`/auth/users/${userId}/approve`);
+      toast.success('User approved — they can now log in');
+      load();
+    } catch {
+      toast.error('Failed to approve user');
+    }
+  };
+
+  // ── Reject user ──────────────────────────────────────────────────────────────
+  const handleReject = async (userId) => {
+    if (!window.confirm('Reject and delete this registration request?')) return;
+    try {
+      await api.patch(`/auth/users/${userId}/reject`);
+      toast.success('Registration rejected and removed');
+      load();
+    } catch {
+      toast.error('Failed to reject user');
     }
   };
 
@@ -165,6 +195,7 @@ export default function AdminPage() {
 
   const TABS = [
     { id: 'users',   label: 'Users',   icon: Users     },
+    { id: 'pending', label: 'Pending Approvals', icon: Clock, badge: pendingUsers.length },
     { id: 'offices', label: 'Offices', icon: Building2 },
   ];
 
@@ -194,6 +225,11 @@ export default function AdminPage() {
             )}
           >
             <t.icon size={14} />{t.label}
+            {t.badge != null && t.badge > 0 && (
+              <span className="ml-1 text-xs bg-amber-500 text-black px-1.5 py-0.5 rounded-full font-bold">
+                {t.badge}
+              </span>
+            )}
             {t.id === 'users' && (
               <span className="ml-1 text-xs bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded-full">
                 {users.length}
@@ -302,6 +338,68 @@ export default function AdminPage() {
                   </Table>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* ── PENDING APPROVALS TAB ───────────────────────────────────────── */}
+          {tab === 'pending' && (
+            <div className="space-y-4">
+              {pendingUsers.length === 0 ? (
+                <div className="card p-10 text-center">
+                  <UserCheck size={36} className="text-emerald-500 mx-auto mb-3" />
+                  <p className="text-slate-300 font-medium">No pending approvals</p>
+                  <p className="text-slate-500 text-sm mt-1">All registrations have been reviewed.</p>
+                </div>
+              ) : (
+                <div className="card">
+                  <div className="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
+                    <Clock size={14} className="text-amber-400" />
+                    <span className="text-sm font-medium text-amber-300">{pendingUsers.length} registration{pendingUsers.length > 1 ? 's' : ''} awaiting approval</span>
+                  </div>
+                  <Table headers={['Name & Email', 'Requested Role', 'Office', 'Registered', 'Actions']}>
+                    {pendingUsers.map((u) => (
+                      <tr key={u._id} className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-slate-200 text-sm">{u.name}</div>
+                          <div className="text-xs text-slate-500 font-mono">{u.email}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={ROLE_COLORS[u.role] || 'badge-gray'}>
+                            {u.role.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-400">
+                          {u.office ? (
+                            <div>
+                              <div className="font-medium text-slate-300">{u.office.code}</div>
+                              <div className="text-slate-500">{u.office.city}</div>
+                            </div>
+                          ) : <span className="text-slate-600">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-500">
+                          {formatDistanceToNow(new Date(u.createdAt), { addSuffix: true })}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleApprove(u._id)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs rounded-lg font-medium transition-colors"
+                            >
+                              <UserCheck size={12} /> Approve
+                            </button>
+                            <button
+                              onClick={() => handleReject(u._id)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/60 hover:bg-red-800 text-red-300 text-xs rounded-lg font-medium transition-colors"
+                            >
+                              <UserX size={12} /> Reject
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </Table>
+                </div>
+              )}
             </div>
           )}
 
