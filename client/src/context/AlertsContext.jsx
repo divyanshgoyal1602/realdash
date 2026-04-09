@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import { useSocket } from './SocketContext';
+import { useAuth } from './AuthContext';
 
 const AlertsContext = createContext(null);
 
@@ -8,8 +9,10 @@ export const AlertsProvider = ({ children }) => {
   const [alerts, setAlerts] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const { on } = useSocket() || {};
+  const { user } = useAuth();  // ← only fetch when logged in
 
   const fetchAlerts = useCallback(async () => {
+    if (!user) return;  // ← guard: skip if not authenticated
     try {
       const { data } = await api.get('/alerts');
       setAlerts(data.alerts);
@@ -17,19 +20,27 @@ export const AlertsProvider = ({ children }) => {
     } catch {
       // silently fail
     }
-  }, []);
+  }, [user]);
+
+  // Reset when user logs out
+  useEffect(() => {
+    if (!user) {
+      setAlerts([]);
+      setUnreadCount(0);
+    }
+  }, [user]);
 
   useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
 
   // Listen for new real-time alerts via socket
   useEffect(() => {
-    if (!on) return;
+    if (!on || !user) return;
     const unsub = on('alert:new', (alert) => {
       setAlerts((prev) => [alert, ...prev]);
       setUnreadCount((c) => c + 1);
     });
     return unsub;
-  }, [on]);
+  }, [on, user]);
 
   const markRead = async (id) => {
     try {
