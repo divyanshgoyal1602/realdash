@@ -15,12 +15,22 @@ const server = http.createServer(app);
 
 // Resolve allowed CORS origins
 const configuredOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
-const isDev = process.env.NODE_ENV !== 'production';
-const corsOrigins = isDev
-  // In development, allow any localhost origin so Vite can pick any port
-  ? [/^http:\/\/localhost(:\d+)?$/]
-  // In production, stick to the configured origin string
-  : [configuredOrigin];
+
+// Build a flexible CORS handler:
+// - In dev OR if CLIENT_ORIGIN='*'  → allow everything
+// - Otherwise → allow the listed origin(s) + any localhost
+let corsOrigins;
+if (configuredOrigin === '*') {
+  corsOrigins = true; // allow all
+} else {
+  const originList = configuredOrigin.split(',').map(o => o.trim());
+  corsOrigins = (origin, callback) => {
+    if (!origin) return callback(null, true); // curl/Postman/server-to-server
+    if (originList.includes(origin)) return callback(null, true);
+    if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return callback(null, true);
+    return callback(new Error(`CORS: origin ${origin} not allowed`));
+  };
+}
 
 const io = new Server(server, {
   cors: {
