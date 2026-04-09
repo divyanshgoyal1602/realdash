@@ -1,0 +1,231 @@
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+const Office = require('../models/Office');
+
+const signToken = (id) =>
+  jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '7d' });
+
+// Generate a short-lived invite token (used for self-registration link)
+const signInviteToken = (payload) =>
+  jwt.sign(payload, process.env.JWT_SECRET + '_invite', { expiresIn: '48h' });
+
+// POST /api/auth/register  – open self-registration
+// Allowed roles via self-registration: viewer, office_staff
+// Admin-level roles (office_admin, ministry, superadmin) require an admin to create them
+exports.register = async (req, res) => {
+  try {
+    const { name, email, password, confirmPassword, role, office, inviteToken } = req.body;
+
+    // Basic validation
+    if (!name || !email || !password)
+      return res.status(400).json({ message: 'Name, email and password are required' });
+
+    if (password !== confirmPassword)
+      return res.status(400).json({ message: 'Passwords do not match' });
+
+    if (password.length < 8)
+      return res.status(400).json({ message: 'Password must be at least 8 characters' });
+
+    const exists = await User.findOne({ email });
+    if (exists) return res.status(400).json({ message: 'Email is already registered' });
+
+    // Determine allowed role
+    let assignedRole = 'viewer';
+    let assignedOffice = null;
+
+    if (inviteToken) {
+      // Decode invite token if present (set by admin)
+      try {
+        const decoded = jwt.verify(inviteToken, process.env.JWT_SECRET + '_invite');
+        assignedRole = decoded.role || 'office_staff';
+        assignedOffice = decoded.officeId || null;
+      } catch {
+        return res.status(400).json({ message: 'Invalid or expired invitation link' });
+      }
+    } else {
+      // Self-registration: only viewer or office_staff allowed
+      const allowedSelfRoles = ['viewer', 'office_staff'];
+      assignedRole = allowedSelfRoles.includes(role) ? role : 'viewer';
+      assignedOffice = office || null;
+    }
+
+    const user = await User.create({
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      password,
+      role: assignedRole,
+      office: assignedOffice,
+    });
+
+    await user.populate('office');
+    const token = signToken(user._id);
+
+    res.status(201).json({
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        office: user.office,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// POST /api/auth/admin-register  – admin creates any role (protected)
+exports.adminRegister = async (req, res) => {
+  try {
+    const { name, email, password, role, office } = req.body;
+
+    if (!name || !email || !password || !role)
+      return res.status(400).json({ message: 'All fields are required' });
+
+    const exists = await User.findOne({ email });
+    if (exists) return res.status(400).json({ message: 'Email already registered' });
+
+    const user = await User.create({ name: name.trim(), email: email.toLowerCase().trim(), password, role, office: office || null });
+    await user.populate('office');
+
+    res.status(201).json({
+      message: 'User created successfully',
+      user: { id: user._id, name: user.name, email: user.email, role: user.role, office: user.office },
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// POST /api/auth/generate-invite  – admin generates invite link
+exports.generateInvite = async (req, res) => {
+  try {
+    const { role, officeId, email } = req.body;
+    const payload = { role, officeId: officeId || null, email: email || null };
+    const token = signInviteToken(payload);
+    const link = `${process.env.CLIENT_ORIGIN || 'http://localhost:5173'}/register?invite=${token}`;
+    res.json({ inviteLink: link, expiresIn: '48 hours' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// POST /api/auth/login
+exports.login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
+
+    const user = await User.findOne({ email }).select('+password').populate('office');
+    if (!user || !(await user.matchPassword(password)))
+      return res.status(401).json({ message: 'Invalid credentials' });
+
+    if (!user.isActive) return res.status(403).json({ message: 'Account deactivated' });
+
+    user.lastLogin = new Date();
+    await user.save({ validateBeforeSave: false });
+
+    const token = signToken(user._id);
+    res.json({
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        office: user.office,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// GET /api/auth/me
+exports.getMe = async (req, res) => {
+  res.json({ user: req.user });
+};
+
+// GET /api/auth/users  – list all users (admin only)
+exports.getUsers = async (req, res) => {
+  try {
+    const { role, officeId, page = 1, limit = 50 } = req.query;
+    const filter = {};
+    if (role) filter.role = role;
+    if (officeId) filter.office = officeId;
+    const total = await User.countDocuments(filter);
+    const users = await User.find(filter)
+      .populate('office', 'name code city')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .select('-password');
+    res.json({ users, total });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// PUT /api/auth/users/:id
+exports.updateUser = async (req, res) => {
+  try {
+    const { name, role, office, isActive } = req.body;
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { name, role, office: office || null, isActive },
+      { new: true, runValidators: true }
+    ).populate('office', 'name code city').select('-password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ user });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// DELETE /api/auth/users/:id
+exports.deleteUser = async (req, res) => {
+  try {
+    if (req.params.id === req.user._id.toString())
+      return res.status(400).json({ message: 'Cannot delete your own account' });
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ message: 'User deleted' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// PATCH /api/auth/users/:id/reset-password
+exports.resetPassword = async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 8)
+      return res.status(400).json({ message: 'Password must be at least 8 characters' });
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    user.password = newPassword;
+    await user.save();
+    res.json({ message: 'Password reset successfully' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// PATCH /api/auth/change-password
+exports.changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword)
+      return res.status(400).json({ message: 'Both fields required' });
+    if (newPassword.length < 8)
+      return res.status(400).json({ message: 'New password must be at least 8 characters' });
+    const user = await User.findById(req.user._id).select('+password');
+    if (!(await user.matchPassword(currentPassword)))
+      return res.status(401).json({ message: 'Current password is incorrect' });
+    user.password = newPassword;
+    await user.save();
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
