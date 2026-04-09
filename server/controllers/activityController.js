@@ -71,16 +71,23 @@ exports.createActivity = async (req, res) => {
 // PUT /api/activities/:id
 exports.updateActivity = async (req, res) => {
   try {
-    const activity = await Activity.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    }).populate('office', 'name code city');
-
+    const activity = await Activity.findById(req.params.id);
     if (!activity) return res.status(404).json({ message: 'Activity not found' });
 
+    // office_admin can only edit activities of their own office
+    if (req.user.role === 'office_admin') {
+      if (activity.office.toString() !== req.user.office._id.toString()) {
+        return res.status(403).json({ message: 'Not allowed to edit activities of another office' });
+      }
+    }
+
+    const updated = await Activity.findByIdAndUpdate(req.params.id, req.body, {
+      new: true, runValidators: true,
+    }).populate('office', 'name code city');
+
     const io = req.app.get('io');
-    io.emit('activity:updated', activity);
-    res.json({ activity });
+    io.emit('activity:updated', updated);
+    res.json({ activity: updated });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -89,11 +96,21 @@ exports.updateActivity = async (req, res) => {
 // DELETE /api/activities/:id
 exports.deleteActivity = async (req, res) => {
   try {
-    const activity = await Activity.findByIdAndDelete(req.params.id);
+    const activity = await Activity.findById(req.params.id);
     if (!activity) return res.status(404).json({ message: 'Activity not found' });
+
+    // office_admin can only delete activities of their own office
+    if (req.user.role === 'office_admin') {
+      if (activity.office.toString() !== req.user.office._id.toString()) {
+        return res.status(403).json({ message: 'Not allowed to delete activities of another office' });
+      }
+    }
+
+    await activity.deleteOne();
     req.app.get('io').emit('activity:deleted', { id: req.params.id });
     res.json({ message: 'Activity deleted' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
+

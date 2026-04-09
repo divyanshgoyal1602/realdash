@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { Plus, Search, Filter } from 'lucide-react';
+import { Plus, Search, Pencil, Trash2 } from 'lucide-react';
 import { useActivities } from '../hooks/useDashboard';
 import { useAuth } from '../context/AuthContext';
 import {
   PageHeader, StatusBadge, Spinner, Table,
-  EmptyState, Select,
+  EmptyState, Select, Modal,
 } from '../components/shared/UI';
 import ActivityForm from '../components/offices/ActivityForm';
 import api from '../services/api';
@@ -24,9 +24,19 @@ export default function ActivitiesPage() {
   const [filters, setFilters] = useState({ page: 1, limit: 30 });
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [editActivity, setEditActivity] = useState(null); // activity being edited
+  const [editForm, setEditForm] = useState({});
+  const [saving, setSaving] = useState(false);
   const { activities, total, loading, refetch } = useActivities(filters);
 
   const setFilter = (k, v) => setFilters((f) => ({ ...f, [k]: v, page: 1 }));
+
+  // Can a user edit/delete this specific activity?
+  const canEditActivity = (a) => {
+    if (['superadmin', 'ministry'].includes(user?.role)) return true;
+    if (user?.role === 'office_admin' && a.office?._id === user?.office?._id) return true;
+    return false;
+  };
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this activity?')) return;
@@ -34,8 +44,37 @@ export default function ActivitiesPage() {
       await api.delete(`/activities/${id}`);
       toast.success('Activity deleted');
       refetch();
-    } catch {
-      toast.error('Failed to delete');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete');
+    }
+  };
+
+  const openEdit = (a) => {
+    setEditActivity(a);
+    setEditForm({
+      activityName: a.activityName,
+      description: a.description || '',
+      category: a.category,
+      status: a.status,
+      achievedValue: a.achievedValue,
+      targetValue: a.targetValue,
+      expenditure: a.expenditure,
+      date: a.date?.slice(0, 10),
+    });
+  };
+
+  const handleEditSave = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.put(`/activities/${editActivity._id}`, editForm);
+      toast.success('Activity updated');
+      setEditActivity(null);
+      refetch();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -99,9 +138,10 @@ export default function ActivitiesPage() {
         {loading ? <Spinner /> : filtered.length === 0 ? (
           <EmptyState title="No activities found" desc="Try adjusting your filters" />
         ) : (
-          <Table headers={['Activity', 'Office', 'Category', 'Date', 'Progress', 'Expenditure', 'Status', '']}>
+          <Table headers={['Activity', 'Office', 'Category', 'Date', 'Progress', 'Expenditure', 'Status', 'Actions']}>
             {filtered.map((a) => {
               const pct = a.targetValue > 0 ? Math.round((a.achievedValue / a.targetValue) * 100) : 0;
+              const canAct = canEditActivity(a);
               return (
                 <tr key={a._id} className="border-b border-slate-800/60 hover:bg-slate-800/20 transition-colors">
                   <td className="px-4 py-3 max-w-[200px]">
@@ -137,13 +177,23 @@ export default function ActivitiesPage() {
                   </td>
                   <td className="px-4 py-3"><StatusBadge status={a.status} /></td>
                   <td className="px-4 py-3">
-                    {['superadmin', 'ministry', 'office_admin'].includes(user?.role) && (
-                      <button
-                        onClick={() => handleDelete(a._id)}
-                        className="text-slate-600 hover:text-red-400 text-xs transition-colors"
-                      >
-                        Del
-                      </button>
+                    {canAct && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => openEdit(a)}
+                          className="text-slate-500 hover:text-brand-400 transition-colors"
+                          title="Edit activity"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(a._id)}
+                          className="text-slate-500 hover:text-red-400 transition-colors"
+                          title="Delete activity"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -153,6 +203,7 @@ export default function ActivitiesPage() {
         )}
       </div>
 
+      {/* Log Activity Modal */}
       {showForm && (
         <ActivityForm
           officeId={user?.office?._id}
@@ -160,6 +211,60 @@ export default function ActivitiesPage() {
           onCreated={() => { setShowForm(false); refetch(); toast.success('Activity logged'); }}
         />
       )}
+
+      {/* Edit Activity Modal */}
+      <Modal open={!!editActivity} onClose={() => setEditActivity(null)} title="Edit Activity" maxWidth="max-w-lg">
+        <form onSubmit={handleEditSave} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2">
+              <label className="label block mb-1.5">Activity Name *</label>
+              <input className="input" required value={editForm.activityName || ''}
+                onChange={(e) => setEditForm(f => ({ ...f, activityName: e.target.value }))} />
+            </div>
+            <div className="col-span-2">
+              <label className="label block mb-1.5">Description</label>
+              <textarea className="input" rows={2} value={editForm.description || ''}
+                onChange={(e) => setEditForm(f => ({ ...f, description: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label block mb-1.5">Category</label>
+              <Select value={editForm.category || ''} onChange={(v) => setEditForm(f => ({ ...f, category: v }))}
+                options={CATEGORIES} placeholder="Select" />
+            </div>
+            <div>
+              <label className="label block mb-1.5">Status</label>
+              <Select value={editForm.status || ''} onChange={(v) => setEditForm(f => ({ ...f, status: v }))}
+                options={STATUSES} placeholder="Select" />
+            </div>
+            <div>
+              <label className="label block mb-1.5">Achieved Value</label>
+              <input type="number" className="input" value={editForm.achievedValue ?? ''}
+                onChange={(e) => setEditForm(f => ({ ...f, achievedValue: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <label className="label block mb-1.5">Target Value</label>
+              <input type="number" className="input" value={editForm.targetValue ?? ''}
+                onChange={(e) => setEditForm(f => ({ ...f, targetValue: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <label className="label block mb-1.5">Expenditure (₹)</label>
+              <input type="number" className="input" value={editForm.expenditure ?? ''}
+                onChange={(e) => setEditForm(f => ({ ...f, expenditure: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <label className="label block mb-1.5">Date</label>
+              <input type="date" className="input" value={editForm.date || ''}
+                onChange={(e) => setEditForm(f => ({ ...f, date: e.target.value }))} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 pt-1">
+            <button type="button" onClick={() => setEditActivity(null)} className="btn-ghost text-sm">Cancel</button>
+            <button type="submit" disabled={saving} className="btn-primary text-sm">
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
