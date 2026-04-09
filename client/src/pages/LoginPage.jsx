@@ -60,7 +60,7 @@ export default function LoginPage() {
                   required
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  placeholder="admin@tourism.gov.in"
+                  placeholder="your@email.com"
                   className="input pl-9"
                 />
               </div>
@@ -98,13 +98,7 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-5 p-3 rounded-lg bg-slate-800/60 border border-slate-700/50">
-            <p className="text-xs text-slate-500 font-medium mb-2">Demo credentials:</p>
-            <div className="space-y-1 text-xs text-slate-400 font-mono">
-              <div>admin@tourism.gov.in / Admin@123</div>
-              <div>ministry@tourism.gov.in / Ministry@123</div>
-            </div>
-          </div>
+
         </div>
 
         <p className="text-center text-sm text-slate-500 mt-5">
